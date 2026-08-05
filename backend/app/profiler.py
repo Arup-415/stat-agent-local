@@ -62,3 +62,58 @@ def missing_value_percentage(df):
     })
 
     return result
+
+
+def categorical_summary(df):
+    """
+    Returns summary for categorical columns.
+    """
+
+    categorical_df = df.select_dtypes(include=["object", "category"])
+
+    summary = {}
+
+    for col in categorical_df.columns:
+        summary[col] = {
+            "Unique Values": categorical_df[col].nunique(),
+            "Most Frequent": categorical_df[col].mode()[0] if not categorical_df[col].mode().empty else None,
+            "Frequency": categorical_df[col].value_counts().iloc[0] if not categorical_df[col].empty else 0
+        }
+
+    return summary
+
+
+def correlation_matrix(df):
+    """
+    Returns the correlation matrix for numerical columns.
+    """
+
+    numerical_df = df.select_dtypes(include=np.number)
+
+    return numerical_df.corr()
+
+
+
+def detect_outliers_iqr(df):
+    """
+    Detect outliers in numerical columns using the IQR method.
+    """
+
+    numerical_df = df.select_dtypes(include=np.number)
+
+    outliers = {}
+
+    for column in numerical_df.columns:
+        Q1 = numerical_df[column].quantile(0.25)
+        Q3 = numerical_df[column].quantile(0.75)
+        IQR = Q3 - Q1
+
+        lower = Q1 - 1.5 * IQR
+        upper = Q3 + 1.5 * IQR
+
+        outliers[column] = numerical_df[
+            (numerical_df[column] < lower) |
+            (numerical_df[column] > upper)
+        ].index.tolist()
+
+    return outliers
