@@ -46,6 +46,8 @@ from app.stats_engine import (
 )
 
 
+from app.chat_api import router as chat_router
+
 # ----------------------------------------------------
 # Helper Functions
 # ----------------------------------------------------
@@ -388,3 +390,13 @@ def anova(data: MultiGroupRequest):
 def kruskal(data: MultiGroupRequest):
     return kruskal_test(*data.groups)
 
+
+# ----------------------------------------------------
+# AI Chat Router
+# ----------------------------------------------------
+
+app.include_router(
+    chat_router,
+    prefix="/ai",
+    tags=["AI Assistant"]
+)

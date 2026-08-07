@@ -13,3 +13,10 @@ class MultiGroupRequest(BaseModel):
 
 class ChiSquareRequest(BaseModel):
     table: List[List[int]]
+    
+class QuestionRequest(BaseModel):
+    question: str
+
+
+class QuestionResponse(BaseModel):
+    answer: dict
