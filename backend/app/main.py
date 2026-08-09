@@ -20,22 +20,6 @@ from app.stats_engine import (
     spearman_corr,
     adf_test,
     kpss_test,
-)
-
-app = FastAPI(
-    title="Statistics AI Agent API",
-    version="1.0.0",
-    description="API for statistical profiling and hypothesis testing"
-)
-
-
-from app.models import (
-    TwoSampleRequest,
-    MultiGroupRequest,
-    ChiSquareRequest
-)
-
-from app.stats_engine import (
     independent_ttest,
     paired_ttest,
     mann_whitney_test,
@@ -45,8 +29,20 @@ from app.stats_engine import (
     kruskal_test,
 )
 
+from app.models import (
+    TwoSampleRequest,
+    MultiGroupRequest,
+    ChiSquareRequest,
+)
 
 from app.chat_api import router as chat_router
+from app.dataset_store import dataset_store
+
+app = FastAPI(
+    title="Statistics AI Agent API",
+    version="1.0.0",
+    description="API for statistical profiling and hypothesis testing"
+)
 
 # ----------------------------------------------------
 # Helper Functions
@@ -96,7 +92,11 @@ async def upload_csv(file: UploadFile = File(...)):
 
         df = read_uploaded_csv(temp_path)
 
+        # Store dataset for AI Chat
+        dataset_store.set_dataset(df, file.filename)
+
         return {
+            "message": "Dataset uploaded successfully.",
             "filename": file.filename,
             "rows": len(df),
             "columns": len(df.columns),
@@ -117,9 +117,7 @@ async def summary(file: UploadFile = File(...)):
     temp_path = await save_uploaded_file(file)
 
     try:
-
         df = read_uploaded_csv(temp_path)
-
         return dataset_summary(df)
 
     finally:
@@ -136,9 +134,7 @@ async def numerical(file: UploadFile = File(...)):
     temp_path = await save_uploaded_file(file)
 
     try:
-
         df = read_uploaded_csv(temp_path)
-
         return numerical_summary(df)
 
     finally:
@@ -155,9 +151,7 @@ async def missing(file: UploadFile = File(...)):
     temp_path = await save_uploaded_file(file)
 
     try:
-
         df = read_uploaded_csv(temp_path)
-
         return missing_value_percentage(df).to_dict()
 
     finally:
@@ -174,9 +168,7 @@ async def categorical(file: UploadFile = File(...)):
     temp_path = await save_uploaded_file(file)
 
     try:
-
         df = read_uploaded_csv(temp_path)
-
         return categorical_summary(df)
 
     finally:
@@ -193,9 +185,7 @@ async def correlation(file: UploadFile = File(...)):
     temp_path = await save_uploaded_file(file)
 
     try:
-
         df = read_uploaded_csv(temp_path)
-
         return correlation_matrix(df).to_dict()
 
     finally:
@@ -212,9 +202,7 @@ async def outliers(file: UploadFile = File(...)):
     temp_path = await save_uploaded_file(file)
 
     try:
-
         df = read_uploaded_csv(temp_path)
-
         return detect_outliers_iqr(df)
 
     finally:
@@ -231,9 +219,7 @@ async def descriptive(file: UploadFile = File(...)):
     temp_path = await save_uploaded_file(file)
 
     try:
-
         df = read_uploaded_csv(temp_path)
-
         return descriptive_statistics(df).to_dict()
 
     finally:
@@ -250,26 +236,26 @@ async def confidence(file: UploadFile = File(...), column: str = ""):
     temp_path = await save_uploaded_file(file)
 
     try:
-
         df = read_uploaded_csv(temp_path)
-
         return confidence_interval(df[column])
 
     finally:
-        os.remove(temp_path)
+        os.remove(temp_path)   
 
 
 # ----------------------------------------------------
-# Shapiro Test
+# Shapiro-Wilk Normality Test
 # ----------------------------------------------------
 
 @app.post("/shapiro/{column}")
-async def shapiro(file: UploadFile = File(...), column: str = ""):
+async def shapiro(
+    file: UploadFile = File(...),
+    column: str = ""
+):
 
     temp_path = await save_uploaded_file(file)
 
     try:
-
         df = read_uploaded_csv(temp_path)
 
         return shapiro_test(df, column)
@@ -292,10 +278,12 @@ async def pearson(
     temp_path = await save_uploaded_file(file)
 
     try:
-
         df = read_uploaded_csv(temp_path)
 
-        return pearson_corr(df[col1], df[col2])
+        return pearson_corr(
+            df[col1],
+            df[col2]
+        )
 
     finally:
         os.remove(temp_path)
@@ -315,26 +303,30 @@ async def spearman(
     temp_path = await save_uploaded_file(file)
 
     try:
-
         df = read_uploaded_csv(temp_path)
 
-        return spearman_corr(df[col1], df[col2])
+        return spearman_corr(
+            df[col1],
+            df[col2]
+        )
 
     finally:
         os.remove(temp_path)
 
 
 # ----------------------------------------------------
-# ADF Test
+# Augmented Dickey-Fuller Test
 # ----------------------------------------------------
 
 @app.post("/adf/{column}")
-async def adf(file: UploadFile = File(...), column: str = ""):
+async def adf(
+    file: UploadFile = File(...),
+    column: str = ""
+):
 
     temp_path = await save_uploaded_file(file)
 
     try:
-
         df = read_uploaded_csv(temp_path)
 
         return adf_test(df[column])
@@ -348,52 +340,123 @@ async def adf(file: UploadFile = File(...), column: str = ""):
 # ----------------------------------------------------
 
 @app.post("/kpss/{column}")
-async def kpss(file: UploadFile = File(...), column: str = ""):
+async def kpss(
+    file: UploadFile = File(...),
+    column: str = ""
+):
 
     temp_path = await save_uploaded_file(file)
 
     try:
-
         df = read_uploaded_csv(temp_path)
 
         return kpss_test(df[column])
 
     finally:
         os.remove(temp_path)
-        
-        
+
+
+# ====================================================
+# TWO-SAMPLE STATISTICAL TESTS
+# ====================================================
+
+
+# ----------------------------------------------------
+# Independent T-Test
+# ----------------------------------------------------
+
 @app.post("/ttest")
 def ttest(data: TwoSampleRequest):
-    return independent_ttest(data.group1, data.group2)
+
+    return independent_ttest(
+        data.group1,
+        data.group2
+    )
+
+
+# ----------------------------------------------------
+# Paired T-Test
+# ----------------------------------------------------
 
 @app.post("/paired-ttest")
-def paired(data: TwoSampleRequest):
-    return paired_ttest(data.group1, data.group2)
+def paired_ttest_endpoint(data: TwoSampleRequest):
+
+    return paired_ttest(
+        data.group1,
+        data.group2
+    )
+
+
+# ----------------------------------------------------
+# Mann-Whitney U Test
+# ----------------------------------------------------
 
 @app.post("/mann-whitney")
-def mann(data: TwoSampleRequest):
-    return mann_whitney_test(data.group1, data.group2)
+def mann_whitney(data: TwoSampleRequest):
+
+    return mann_whitney_test(
+        data.group1,
+        data.group2
+    )
+
+
+# ----------------------------------------------------
+# Wilcoxon Signed-Rank Test
+# ----------------------------------------------------
 
 @app.post("/wilcoxon")
 def wilcoxon(data: TwoSampleRequest):
-    return wilcoxon_test(data.group1, data.group2)
+
+    return wilcoxon_test(
+        data.group1,
+        data.group2
+    )
+
+
+# ====================================================
+# MULTI-GROUP STATISTICAL TESTS
+# ====================================================
+
+
+# ----------------------------------------------------
+# Chi-Square Test
+# ----------------------------------------------------
 
 @app.post("/chi-square")
-def chisquare(data: ChiSquareRequest):
-    return chi_square_test(data.table)
+def chi_square(data: ChiSquareRequest):
+
+    return chi_square_test(
+        data.table
+    )
+
+
+# ----------------------------------------------------
+# One-Way ANOVA
+# ----------------------------------------------------
 
 @app.post("/anova")
 def anova(data: MultiGroupRequest):
-    return one_way_anova(*data.groups)
+
+    return one_way_anova(
+        *data.groups
+    )
+
+
+# ----------------------------------------------------
+# Kruskal-Wallis Test
+# ----------------------------------------------------
 
 @app.post("/kruskal")
 def kruskal(data: MultiGroupRequest):
-    return kruskal_test(*data.groups)
+
+    return kruskal_test(
+        *data.groups
+    )
 
 
-# ----------------------------------------------------
-# AI Chat Router
-# ----------------------------------------------------
+# ====================================================
+# AI CHAT ROUTER
+# ====================================================
 
 app.include_router(
     chat_router,
