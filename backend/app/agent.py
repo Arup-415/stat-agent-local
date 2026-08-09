@@ -62,6 +62,37 @@ def ask_agent(question, df=None, **kwargs):
 
     if df is not None:
         columns = extract_columns(question, df)
+        
+        
+    # ==================================================
+    # COMPLETE DATASET ANALYSIS
+    # ==================================================
+
+    if any (phrase in question.lower() for phrase in [
+         "analyze my dataset",
+         "analyse my dataset",
+         "analyze dataset",
+         "analyse dataset",
+         "full analysis",
+         "complete analysis",
+         "analyze the dataset",
+         "analyse the dataset",
+    ]):
+
+        if df is None:
+            return {
+                 "Error": "Please upload a dataset first."
+         }
+
+        response = analyze_dataset(df)
+
+        memory.update(
+           question=question,
+           result=response,
+           dataframe=df
+    )
+
+        return response
 
     # ==================================================
     # SHAPIRO-WILK TEST
@@ -403,34 +434,7 @@ Use a 0.05 significance level.
 
         return response
 
-    # ==================================================
-    # COMPLETE DATASET ANALYSIS
-    # ==================================================
-
-    elif (
-        "analyze my dataset" in question.lower()
-        or "analyse my dataset" in question.lower()
-        or "analyze dataset" in question.lower()
-        or "analyse dataset" in question.lower()
-        or "full analysis" in question.lower()
-        or "complete analysis" in question.lower()
-    ):
-
-        if df is None:
-            return {
-                "Error": "Please upload a dataset first."
-            }
-
-        response = analyze_dataset(df)
-
-        memory.update(
-            question=question,
-            result=response,
-            dataframe=df
-        )
-
-        return response
-
+   
     # ==================================================
     # DESCRIPTIVE STATISTICS
     # ==================================================

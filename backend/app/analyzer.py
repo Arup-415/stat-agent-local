@@ -1,3 +1,5 @@
+import numpy as np
+
 from app.profiler import (
     dataset_summary,
     numerical_summary,
@@ -8,6 +10,43 @@ from app.profiler import (
 )
 
 from app.llm import ask_llm
+
+
+def make_json_serializable(obj):
+    if isinstance(obj, dict):
+        return {
+            str(key): make_json_serializable(value)
+            for key, value in obj.items()
+        }
+
+    if isinstance(obj, list):
+        return [
+            make_json_serializable(value)
+            for value in obj
+        ]
+
+    if isinstance(obj, tuple):
+        return [
+            make_json_serializable(value)
+            for value in obj
+        ]
+
+    if isinstance(obj, np.integer):
+        return int(obj)
+
+    if isinstance(obj, np.floating):
+        return float(obj)
+
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+
+    if isinstance(obj, np.bool_):
+        return bool(obj)
+
+    if obj is None:
+        return None
+
+    return obj
 
 
 def analyze_dataset(df):
@@ -44,6 +83,12 @@ Missing Values:
 Categorical Summary:
 {categorical}
 
+Correlation Matrix:
+{correlation}
+
+Outliers:
+{outliers}
+
 Based on this information, provide:
 
 1. Dataset Overview
@@ -58,7 +103,7 @@ Keep the explanation easy to understand.
 
     ai_report = ask_llm(prompt)
 
-    return {
+    result = {
         "Dataset Summary": summary,
         "Numerical Summary": numerical,
         "Missing Values": missing,
@@ -67,3 +112,6 @@ Keep the explanation easy to understand.
         "Outliers": outliers,
         "AI Report": ai_report,
     }
+
+    # Convert EVERYTHING before returning to FastAPI
+    return make_json_serializable(result)
