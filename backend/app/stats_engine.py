@@ -205,11 +205,23 @@ def kpss_test(series):
 # -----------------------------------------------------
 
 def descriptive_statistics(df):
-
     numerical = df.select_dtypes(include=np.number)
 
-    return numerical.describe().T
+    if numerical.empty:
+        return pd.DataFrame(
+            columns=[
+                "count",
+                "mean",
+                "std",
+                "min",
+                "25%",
+                "50%",
+                "75%",
+                "max",
+            ]
+        )
 
+    return numerical.describe().T
 
 # -----------------------------------------------------
 # CONFIDENCE INTERVAL
