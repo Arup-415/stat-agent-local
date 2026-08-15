@@ -2,6 +2,8 @@ from fastapi import FastAPI, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 import tempfile
 import os
+import numpy as np
+import pandas as pd
 
 from app.profiler import (
     load_data,
@@ -225,6 +227,34 @@ async def outliers(file: UploadFile = File(...)):
         os.remove(temp_path)
 
 
+def make_json_serializable(obj):
+    if isinstance(obj, dict):
+        return {
+            str(key): make_json_serializable(value)
+            for key, value in obj.items()
+        }
+
+    if isinstance(obj, list):
+        return [make_json_serializable(item) for item in obj]
+
+    if isinstance(obj, tuple):
+        return [make_json_serializable(item) for item in obj]
+
+    if isinstance(obj, np.integer):
+        return int(obj)
+
+    if isinstance(obj, np.floating):
+        return float(obj)
+
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+
+    if pd.isna(obj):
+        return None
+
+    return obj
+
+
 # ----------------------------------------------------
 # Descriptive Statistics
 # ----------------------------------------------------
@@ -236,10 +266,20 @@ async def descriptive(file: UploadFile = File(...)):
 
     try:
         df = read_uploaded_csv(temp_path)
-        return descriptive_statistics(df).to_dict()
+
+        numerical = descriptive_statistics(df)
+        categorical = categorical_summary(df)
+        missing = missing_value_percentage(df).to_dict()
+
+        return make_json_serializable({
+            "numerical": numerical,
+            "categorical": categorical,
+            "missing": missing,
+        })
 
     finally:
         os.remove(temp_path)
+
 
 
 # ----------------------------------------------------

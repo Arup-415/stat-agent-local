@@ -19,6 +19,7 @@ function App() {
   const [datasetInfo, setDatasetInfo] = useState(null);
   const [analysisResult, setAnalysisResult] = useState(null);
   const [analysisLoading, setAnalysisLoading] = useState(false);
+  const [currentPage, setCurrentPage] = useState("dashboard");
 
   const menu = [
     { name: "Dashboard", icon: Gauge },
@@ -113,15 +114,29 @@ const handleDescriptiveAnalysis = async () => {
 
 
 const runDescriptiveAnalysis = async () => {
+  if (!file) {
+    alert("Please upload a dataset first.");
+    return;
+  }
+
   try {
     setAnalysisLoading(true);
+    setCurrentPage("descriptive");
+
+    const formData = new FormData();
+    formData.append("file", file);
 
     const response = await fetch(
       "http://127.0.0.1:8000/descriptive-statistics",
       {
         method: "POST",
+        body: formData,
       }
     );
+
+    if (!response.ok) {
+      throw new Error(`Analysis failed: ${response.status}`);
+    }
 
     const data = await response.json();
 
@@ -130,13 +145,232 @@ const runDescriptiveAnalysis = async () => {
     setAnalysisResult(data);
 
   } catch (error) {
-    console.error(error);
+    console.error("Analysis error:", error);
     alert("Analysis failed.");
   } finally {
     setAnalysisLoading(false);
   }
 };
 
+const DescriptivePage = () => {
+  return (
+    <main className="main-content">
+      <div className="analysis-page">
+
+        <button
+          className="back-button"
+          onClick={() => setCurrentPage("dashboard")}
+        >
+          ← BACK TO DASHBOARD
+        </button>
+
+        <div className="analysis-header">
+          <p className="section-label">
+            STATISTICAL ANALYSIS
+          </p>
+
+          <h2>DESCRIPTIVE ANALYSIS</h2>
+
+          <p>
+            {file ? file.name : "No dataset loaded"}
+          </p>
+        </div>
+
+        {analysisLoading ? (
+          <div className="analysis-loading">
+            <Brain size={40} />
+
+            <h3>RUNNING ANALYSIS</h3>
+
+            <p>
+              STATCORE is analyzing your dataset...
+            </p>
+          </div>
+       ) : analysisResult ? (
+  <div className="analysis-results">
+
+    {/* DATASET OVERVIEW */}
+    <section className="result-section">
+      <p className="section-label">
+        DATASET
+      </p>
+
+      <h3>OVERVIEW</h3>
+
+      <div className="result-cards">
+
+        <div className="result-card">
+          <span>ROWS</span>
+          <strong>
+            {datasetInfo?.rows ?? "—"}
+          </strong>
+        </div>
+
+        <div className="result-card">
+          <span>VARIABLES</span>
+          <strong>
+            {datasetInfo?.columns ?? "—"}
+          </strong>
+        </div>
+
+        <div className="result-card">
+          <span>NUMERICAL</span>
+          <strong>
+            {analysisResult.statistics &&
+            Object.keys(analysisResult.statistics).length > 0
+              ? Object.keys(analysisResult.statistics).length
+              : "0"}
+          </strong>
+        </div>
+
+      </div>
+    </section>
+
+
+    {/* NUMERICAL STATISTICS */}
+    <section className="result-section">
+      <p className="section-label">
+        NUMERICAL DATA
+      </p>
+
+      <h3>DESCRIPTIVE STATISTICS</h3>
+
+      {analysisResult.available &&
+      Object.keys(analysisResult.statistics).length > 0 ? (
+
+        <div className="statistics-table">
+          <table>
+            <thead>
+              <tr>
+                <th>VARIABLE</th>
+                <th>COUNT</th>
+                <th>MEAN</th>
+                <th>STD DEV</th>
+                <th>MIN</th>
+                <th>MEDIAN</th>
+                <th>MAX</th>
+              </tr>
+            </thead>
+
+            <tbody>
+              {Object.entries(
+                analysisResult.statistics
+              ).map(([variable, stats]) => (
+                <tr key={variable}>
+                  <td>{variable}</td>
+                  <td>{stats.count ?? "—"}</td>
+                  <td>
+                    {stats.mean !== undefined
+                      ? Number(stats.mean).toFixed(3)
+                      : "—"}
+                  </td>
+                  <td>
+                    {stats.std !== undefined
+                      ? Number(stats.std).toFixed(3)
+                      : "—"}
+                  </td>
+                  <td>{stats.min ?? "—"}</td>
+                  <td>
+                    {stats["50%"] !== undefined
+                      ? Number(stats["50%"]).toFixed(3)
+                      : "—"}
+                  </td>
+                  <td>{stats.max ?? "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+      ) : (
+
+        <div className="no-data-card">
+          <Brain size={32} />
+
+          <h4>NO NUMERICAL VARIABLES DETECTED</h4>
+
+          <p>
+            This dataset contains categorical data only.
+            Numerical statistics such as mean, median,
+            variance and standard deviation are not
+            applicable.
+          </p>
+        </div>
+
+      )}
+    </section>
+
+
+    {/* CATEGORICAL DATA */}
+    <section className="result-section">
+      <p className="section-label">
+        CATEGORICAL DATA
+      </p>
+
+      <h3>CATEGORY SUMMARY</h3>
+
+      <div className="no-data-card">
+        <p>
+          Categorical analysis will be displayed here.
+        </p>
+      </div>
+    </section>
+
+
+    {/* DATA QUALITY */}
+    <section className="result-section">
+      <p className="section-label">
+        DATA QUALITY
+      </p>
+
+      <h3>MISSING VALUES</h3>
+
+      <div className="no-data-card">
+        <p>
+          Missing-value analysis will be displayed here.
+        </p>
+      </div>
+    </section>
+
+
+    {/* AI INTERPRETATION */}
+    <section className="result-section">
+      <p className="section-label">
+        AI INTERPRETATION
+      </p>
+
+      <h3>AI REPORT</h3>
+
+      <div className="ai-report">
+        <p>
+          AI interpretation will be displayed here.
+        </p>
+      </div>
+    </section>
+
+  </div>
+        ) : (
+          <div className="analysis-loading">
+            <h3>NO RESULT YET</h3>
+
+            <p>
+              Run the descriptive analysis to see the results.
+            </p>
+          </div>
+        )}
+
+      </div>
+    </main>
+  );
+};
+
+if (currentPage === "descriptive") {
+  return (
+    <div className="app-shell">
+      <DescriptivePage />
+    </div>
+  );
+}
   return (
     <div className="app-shell">
       <div className="background-grid" />
@@ -367,7 +601,7 @@ const runDescriptiveAnalysis = async () => {
               number="01"
               title="DESCRIPTIVE ANALYSIS"
               description="Mean, median, variance, standard deviation and distribution statistics."
-              onClick={handleDescriptiveAnalysis}
+              onClick={runDescriptiveAnalysis}
             />
 
             <Module

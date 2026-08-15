@@ -208,21 +208,17 @@ def descriptive_statistics(df):
     numerical = df.select_dtypes(include=np.number)
 
     if numerical.empty:
-        return pd.DataFrame(
-            columns=[
-                "count",
-                "mean",
-                "std",
-                "min",
-                "25%",
-                "50%",
-                "75%",
-                "max",
-            ]
-        )
+        return {
+            "available": False,
+            "message": "No numerical variables found in the dataset.",
+            "statistics": {}
+        }
 
-    return numerical.describe().T
-
+    return {
+        "available": True,
+        "message": "Numerical descriptive statistics calculated successfully.",
+        "statistics": numerical.describe().T.to_dict(orient="index")
+    }
 # -----------------------------------------------------
 # CONFIDENCE INTERVAL
 # -----------------------------------------------------
