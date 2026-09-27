@@ -1,3 +1,5 @@
+import pandas as pd
+
 from app.router import choose_test
 from app.llm import ask_llm
 from app.prompts import *
@@ -14,11 +16,40 @@ from app.stats_engine import (
     descriptive_statistics,
     confidence_interval,
     independent_ttest,
+    paired_ttest,
+    mann_whitney_test,
+    wilcoxon_test,
+    chi_square_test,
+    kruskal_test,
 )
 
 from app.recommender import recommend_test
-from app.memory import memory
+from app.memory import memory as default_memory
 from app.analyzer import analyze_dataset
+from app.profiler import (
+    dataset_summary,
+    missing_value_percentage,
+    detect_outliers_iqr,
+    correlation_matrix,
+)
+
+
+def _groups_from_columns(df, columns):
+    if df is None or len(columns) < 2:
+        return None, []
+
+    numeric_column = next(
+        (name for name in columns if pd.api.types.is_numeric_dtype(df[name])),
+        None,
+    )
+    group_column = next((name for name in columns if name != numeric_column), None)
+    if numeric_column is None or group_column is None:
+        return None, []
+
+    values = pd.to_numeric(df[numeric_column], errors="coerce")
+    usable = pd.DataFrame({"value": values, "group": df[group_column]}).dropna()
+    groups = [part["value"].to_numpy() for _, part in usable.groupby("group", observed=True, sort=False)]
+    return groups, [numeric_column, group_column]
 
 
 def ask_agent(question, df=None, **kwargs):
@@ -37,6 +68,8 @@ def ask_agent(question, df=None, **kwargs):
     # --------------------------------------------------
     # GET PREVIOUS MEMORY
     # --------------------------------------------------
+
+    memory = kwargs.get("conversation_memory", default_memory)
 
     previous_question = kwargs.get(
         "previous_question",
@@ -333,23 +366,63 @@ Use a 0.05 significance level.
         return response
 
     # ==================================================
+    # PAIRED AND NON-PARAMETRIC TESTS
+    # ==================================================
+
+    elif test in {"paired_ttest", "wilcoxon"}:
+        if df is None:
+            return {"Error": "No dataset loaded. Please upload a CSV first."}
+        if len(columns) < 2:
+            return {"Error": "Please specify two paired numeric columns."}
+
+        paired = df[columns[:2]].apply(pd.to_numeric, errors="coerce").dropna()
+        if len(paired) < 2:
+            return {"Error": "At least two complete pairs are required."}
+        result = paired_ttest(paired.iloc[:, 0], paired.iloc[:, 1]) if test == "paired_ttest" else wilcoxon_test(paired.iloc[:, 0], paired.iloc[:, 1])
+        response = {"Test": "Paired t-test" if test == "paired_ttest" else "Wilcoxon signed-rank test", "Columns": columns[:2], "Result": result}
+        memory.update(question=question, result=response, dataframe=df)
+        return response
+
+    elif test in {"mann_whitney", "kruskal"}:
+        groups = kwargs.get("groups")
+        group_columns = columns[:2]
+        if groups is None:
+            groups, group_columns = _groups_from_columns(df, columns)
+        if groups is None or len(groups) < 2 or any(len(group) < 2 for group in groups):
+            return {"Error": "Select a numeric outcome and a group column with at least two observations per group."}
+        if test == "mann_whitney" and len(groups) != 2:
+            return {"Error": "The Mann-Whitney U test requires exactly two groups."}
+        result = mann_whitney_test(*groups) if test == "mann_whitney" else kruskal_test(*groups)
+        response = {"Test": "Mann-Whitney U test" if test == "mann_whitney" else "Kruskal-Wallis test", "Columns": group_columns, "Result": result}
+        memory.update(question=question, result=response, dataframe=df)
+        return response
+
+    elif test == "chi_square":
+        if df is None:
+            return {"Error": "No dataset loaded. Please upload a CSV first."}
+        if len(columns) < 2:
+            return {"Error": "Please specify two categorical columns."}
+        table = pd.crosstab(df[columns[0]], df[columns[1]])
+        if table.shape[0] < 2 or table.shape[1] < 2:
+            return {"Error": "Each categorical column must contain at least two observed categories."}
+        result = chi_square_test(table.to_numpy())
+        response = {"Test": "Chi-square test of independence", "Columns": columns[:2], "Result": result}
+        memory.update(question=question, result=response, dataframe=df)
+        return response
+
+    # ==================================================
     # INDEPENDENT T TEST
     # ==================================================
 
     elif test == "ttest":
+        groups = kwargs.get("groups")
+        group_columns = columns[:2]
+        if groups is None:
+            groups, group_columns = _groups_from_columns(df, columns)
+        if groups is None or len(groups) != 2 or any(len(group) < 2 for group in groups):
+            return {"Error": "Select a numeric outcome and a grouping column containing exactly two groups with at least two observations each."}
 
-        group1 = kwargs.get("group1")
-        group2 = kwargs.get("group2")
-
-        if group1 is None or group2 is None:
-            return {
-                "Error": "Please provide group1 and group2."
-            }
-
-        result = independent_ttest(
-            group1,
-            group2
-        )
+        result = independent_ttest(*groups)
 
         explanation = ask_llm(
             TTEST_PROMPT.format(
@@ -360,6 +433,7 @@ Use a 0.05 significance level.
 
         response = {
             "Test": "Independent T-Test",
+            "Columns": group_columns,
             "Result": result,
             "Explanation": explanation,
         }
@@ -379,11 +453,11 @@ Use a 0.05 significance level.
     elif test == "anova":
 
         groups = kwargs.get("groups")
-
+        group_columns = columns[:2]
         if groups is None:
-            return {
-                "Error": "Please provide groups."
-            }
+            groups, group_columns = _groups_from_columns(df, columns)
+        if groups is None or len(groups) < 2 or any(len(group) < 2 for group in groups):
+            return {"Error": "Select a numeric outcome and a grouping column with at least two observations in each group."}
 
         result = one_way_anova(*groups)
 
@@ -396,6 +470,7 @@ Use a 0.05 significance level.
 
         response = {
             "Test": "One Way ANOVA",
+            "Columns": group_columns,
             "Result": result,
             "Explanation": explanation,
         }
@@ -454,7 +529,7 @@ Use a 0.05 significance level.
 
         response = {
             "Test": "Descriptive Statistics",
-            "Result": result.to_dict(),
+            "Result": result,
         }
 
         memory.update(
@@ -463,6 +538,34 @@ Use a 0.05 significance level.
             dataframe=df
         )
 
+        return response
+
+    elif test == "summary":
+        if df is None:
+            return {"Error": "No dataset loaded."}
+        response = {"Test": "Dataset overview", "Result": dataset_summary(df)}
+        memory.update(question=question, result=response, dataframe=df)
+        return response
+
+    elif test == "missing":
+        if df is None:
+            return {"Error": "No dataset loaded."}
+        response = {"Test": "Missing value analysis", "Result": missing_value_percentage(df).to_dict()}
+        memory.update(question=question, result=response, dataframe=df)
+        return response
+
+    elif test == "outliers":
+        if df is None:
+            return {"Error": "No dataset loaded."}
+        response = {"Test": "IQR outlier analysis", "Result": detect_outliers_iqr(df)}
+        memory.update(question=question, result=response, dataframe=df)
+        return response
+
+    elif test == "correlation_matrix":
+        if df is None:
+            return {"Error": "No dataset loaded."}
+        response = {"Test": "Pearson correlation matrix", "Result": correlation_matrix(df).to_dict()}
+        memory.update(question=question, result=response, dataframe=df)
         return response
 
     # ==================================================

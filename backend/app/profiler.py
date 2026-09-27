@@ -69,7 +69,7 @@ def categorical_summary(df):
     Returns summary for categorical columns.
     """
 
-    categorical_df = df.select_dtypes(include=["object", "category"])
+    categorical_df = df.select_dtypes(include=["object", "category", "str", "bool"])
 
     summary = {}
 

@@ -1,3 +1,7 @@
+from threading import RLock
+from time import monotonic
+
+
 class ConversationMemory:
     """
     Stores dataset and conversation context for the Statistics AI Agent.
@@ -120,3 +124,45 @@ class ConversationMemory:
 
 # Global memory instance
 memory = ConversationMemory()
+
+
+class SessionMemoryStore:
+    SESSION_TTL_SECONDS = 24 * 60 * 60
+    MAX_SESSIONS = 128
+
+    def __init__(self):
+        self._memories = {}
+        self._lock = RLock()
+
+    def get(self, session_id):
+        now = monotonic()
+        with self._lock:
+            expired = [
+                key
+                for key, entry in self._memories.items()
+                if now - entry["last_access"] > self.SESSION_TTL_SECONDS
+            ]
+            for key in expired:
+                self._memories.pop(key, None)
+
+            entry = self._memories.get(session_id)
+            if entry is None:
+                entry = {"memory": ConversationMemory(), "last_access": now}
+                self._memories[session_id] = entry
+            entry["last_access"] = now
+
+            while len(self._memories) > self.MAX_SESSIONS:
+                oldest = min(self._memories, key=lambda key: self._memories[key]["last_access"])
+                self._memories.pop(oldest, None)
+
+            return entry["memory"]
+
+    def clear(self, session_id=None):
+        with self._lock:
+            if session_id is None:
+                self._memories.clear()
+            else:
+                self._memories.pop(session_id, None)
+
+
+session_memory_store = SessionMemoryStore()

@@ -243,3 +243,61 @@ def confidence_interval(data, confidence=0.95):
         "Lower Bound": interval[0],
         "Upper Bound": interval[1]
     }
+
+
+def test_assumptions(test_name):
+    guidance = {
+        "shapiro": [
+            "Requires 3 to 5,000 usable observations; a non-significant result does not prove normality.",
+            "Observations should be independent and representative of the population.",
+        ],
+        "confidence-interval": [
+            "This is a 95% t-based confidence interval for the mean.",
+            "Interpretation assumes independent, representative observations; skew and outliers matter for small samples.",
+        ],
+        "adf": [
+            "The row order must be the time order, with equally spaced observations.",
+            "This configuration includes an intercept and no trend term; structural breaks can affect the result.",
+        ],
+        "kpss": [
+            "The row order must be the time order, with equally spaced observations.",
+            "This configuration tests level stationarity with a constant; structural breaks can affect the result.",
+        ],
+        "pearson": [
+            "Measures linear association; inspect a scatterplot for curvature and influential outliers.",
+            "Pairs should be independent; the p-value also relies on distributional assumptions.",
+        ],
+        "spearman": [
+            "Measures monotonic rank association, not necessarily a linear relationship.",
+            "Pairs should be independent; many tied ranks can affect the p-value approximation.",
+        ],
+        "paired-t-test": [
+            "Rows must form valid matched pairs, and different pairs should be independent.",
+            "The paired differences should be approximately normal, especially for small samples.",
+        ],
+        "wilcoxon": [
+            "Rows must form valid matched pairs, and different pairs should be independent.",
+            "A symmetric distribution of paired differences is needed for a location-shift interpretation.",
+        ],
+        "independent-t-test": [
+            "Groups should be independent, with approximately normal outcomes within each group for small samples.",
+            "Welch's test does not assume equal group variances; observations within each group must still be independent.",
+        ],
+        "mann-whitney": [
+            "Groups should be independent; this test compares rank distributions, not always medians.",
+            "A median-shift interpretation requires similarly shaped group distributions.",
+        ],
+        "anova": [
+            "Groups should be independent; residuals should be approximately normal with similar variances.",
+            "A significant omnibus result does not identify which groups differ; post-hoc testing is not included.",
+        ],
+        "kruskal": [
+            "Groups should be independent; similarly shaped distributions are needed for a median comparison.",
+            "A significant omnibus result does not identify which groups differ; post-hoc testing is not included.",
+        ],
+        "chi-square": [
+            "Observations should be independent, and each record should contribute to one cell only.",
+            "The chi-square approximation may be unreliable when expected cell counts are small; see diagnostics.",
+        ],
+    }
+    return guidance.get(test_name, [])

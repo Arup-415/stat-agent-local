@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File
+from fastapi import FastAPI, UploadFile, File, Form, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import tempfile
 import os
@@ -30,6 +30,7 @@ from app.stats_engine import (
     chi_square_test,
     one_way_anova,
     kruskal_test,
+    test_assumptions,
 )
 
 from app.models import (
@@ -47,6 +48,7 @@ app = FastAPI(
     description="API for statistical profiling and hypothesis testing"
 )
 
+MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 
 app.add_middleware(
     CORSMiddleware,
@@ -67,17 +69,30 @@ app.add_middleware(
 # ----------------------------------------------------
 
 def read_uploaded_csv(file_path):
-    return load_data(file_path)
+    try:
+        dataframe = load_data(file_path)
+    except (pd.errors.ParserError, pd.errors.EmptyDataError, UnicodeDecodeError, ValueError) as error:
+        raise HTTPException(status_code=400, detail=f"Could not read CSV: {error}") from error
+
+    if dataframe.empty or len(dataframe.columns) == 0:
+        raise HTTPException(status_code=400, detail="The CSV file contains no data rows.")
+    return dataframe
 
 
 async def save_uploaded_file(file: UploadFile):
-    temp = tempfile.NamedTemporaryFile(
-        delete=False,
-        suffix=".csv"
-    )
+    if not file.filename or not file.filename.lower().endswith(".csv"):
+        raise HTTPException(status_code=400, detail="Please upload a CSV file.")
 
-    temp.write(await file.read())
-    temp.close()
+    content = await file.read(MAX_UPLOAD_BYTES + 1)
+    if len(content) > MAX_UPLOAD_BYTES:
+        megabyte = 1024 * 1024
+        size_limit = f"{MAX_UPLOAD_BYTES // megabyte} MB" if MAX_UPLOAD_BYTES >= megabyte else f"{MAX_UPLOAD_BYTES} bytes"
+        raise HTTPException(status_code=413, detail=f"CSV uploads must be {size_limit} or smaller.")
+    if not content.strip():
+        raise HTTPException(status_code=400, detail="The CSV file is empty.")
+
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".csv") as temp:
+        temp.write(content)
 
     return temp.name
 
@@ -99,10 +114,13 @@ def home():
 # ----------------------------------------------------
 
 @app.post("/upload")
-async def upload_csv(file: UploadFile = File(...)):
+async def upload_csv(
+    file: UploadFile = File(...),
+    session_id: str = Header(..., alias="X-Session-ID", min_length=16, max_length=128),
+):
 
-    if not file.filename.endswith(".csv"):
-        return {"error": "Please upload a CSV file."}
+    if not file.filename or not file.filename.lower().endswith(".csv"):
+        raise HTTPException(status_code=400, detail="Please upload a CSV file.")
 
     temp_path = await save_uploaded_file(file)
 
@@ -111,14 +129,17 @@ async def upload_csv(file: UploadFile = File(...)):
         df = read_uploaded_csv(temp_path)
 
         # Store dataset for AI Chat
-        dataset_store.set_dataset(df, file.filename)
+        dataset_store.set_dataset(df, file.filename, session_id)
 
         return {
             "message": "Dataset uploaded successfully.",
             "filename": file.filename,
             "rows": len(df),
             "columns": len(df.columns),
-            "column_names": list(df.columns)
+            "column_names": list(df.columns),
+            "data_types": df.dtypes.astype(str).to_dict(),
+            "numerical_columns": df.select_dtypes(include=np.number).columns.tolist(),
+            "categorical_columns": df.select_dtypes(include=["object", "category", "str", "bool"]).columns.tolist(),
         }
 
     finally:
@@ -244,15 +265,39 @@ def make_json_serializable(obj):
         return int(obj)
 
     if isinstance(obj, np.floating):
-        return float(obj)
+        return float(obj) if np.isfinite(obj) else None
+
+    if isinstance(obj, np.bool_):
+        return bool(obj)
 
     if isinstance(obj, np.ndarray):
         return obj.tolist()
 
-    if pd.isna(obj):
+    if obj is pd.NA or obj is pd.NaT:
+        return None
+
+    if isinstance(obj, float) and not np.isfinite(obj):
         return None
 
     return obj
+
+
+def _numeric_histograms(df):
+    histograms = {}
+    numeric_columns = df.select_dtypes(include=np.number).columns
+
+    for column in numeric_columns:
+        values = pd.to_numeric(df[column], errors="coerce").replace([np.inf, -np.inf], np.nan).dropna().to_numpy()
+        if values.size == 0:
+            continue
+        bin_count = min(12, max(1, int(np.ceil(np.sqrt(values.size)))))
+        counts, edges = np.histogram(values, bins=bin_count)
+        histograms[column] = [
+            {"interval": f"{edges[index]:.3g} to {edges[index + 1]:.3g}", "count": int(count)}
+            for index, count in enumerate(counts)
+        ]
+
+    return histograms
 
 
 # ----------------------------------------------------
@@ -272,11 +317,161 @@ async def descriptive(file: UploadFile = File(...)):
         missing = missing_value_percentage(df).to_dict()
 
         return make_json_serializable({
+            "summary": dataset_summary(df),
             "numerical": numerical,
             "categorical": categorical,
             "missing": missing,
+            "correlation": correlation_matrix(df).round(3).to_dict(),
+            "outliers": detect_outliers_iqr(df),
+            "histograms": _numeric_histograms(df),
         })
 
+    finally:
+        os.remove(temp_path)
+
+
+def _get_numeric_column(df, column):
+    if not column or column not in df.columns:
+        raise HTTPException(status_code=400, detail=f"Select a valid numeric column: {column or 'none selected'}.")
+
+    values = pd.to_numeric(df[column], errors="coerce").replace([np.inf, -np.inf], np.nan).dropna()
+    if values.empty:
+        raise HTTPException(status_code=400, detail=f"Column '{column}' has no usable numeric values.")
+    return values
+
+
+@app.post("/run-test")
+async def run_test(
+    file: UploadFile = File(...),
+    test: str = Form(...),
+    column: str = Form(default=""),
+    second_column: str = Form(default=""),
+    group_column: str = Form(default=""),
+):
+    """Run a supported statistical test using columns from an uploaded CSV."""
+    temp_path = await save_uploaded_file(file)
+
+    try:
+        df = read_uploaded_csv(temp_path)
+        selected_test = test.strip().lower().replace("_", "-")
+        test_key = selected_test
+        result = None
+        columns = []
+        sample_sizes = []
+        group_summaries = []
+        diagnostics = []
+
+        if selected_test in {"shapiro", "normality", "confidence-interval", "adf", "kpss"}:
+            values = _get_numeric_column(df, column)
+            columns = [column]
+            sample_sizes = [{"column": column, "n": int(len(values))}]
+            if selected_test in {"shapiro", "normality"}:
+                if len(values) < 3:
+                    raise HTTPException(status_code=400, detail="Shapiro-Wilk requires at least 3 numeric observations.")
+                if len(values) > 5000:
+                    raise HTTPException(status_code=400, detail="Shapiro-Wilk supports at most 5,000 observations; select a representative sample.")
+                if values.nunique() < 2:
+                    raise HTTPException(status_code=400, detail="Shapiro-Wilk requires a column with non-zero variation.")
+                result = shapiro_test(pd.DataFrame({column: values}), column)
+                selected_test = "shapiro-wilk"
+            elif selected_test == "confidence-interval":
+                if len(values) < 2:
+                    raise HTTPException(status_code=400, detail="A confidence interval requires at least 2 numeric observations.")
+                result = confidence_interval(values)
+            elif selected_test == "adf":
+                if len(values) < 8 or values.nunique() < 2:
+                    raise HTTPException(status_code=400, detail="ADF requires at least 8 ordered observations with non-zero variation.")
+                result = adf_test(values)
+                selected_test = "Augmented Dickey-Fuller"
+            else:
+                if len(values) < 8 or values.nunique() < 2:
+                    raise HTTPException(status_code=400, detail="KPSS requires at least 8 ordered observations with non-zero variation.")
+                result = kpss_test(values)
+                selected_test = "KPSS"
+        elif selected_test in {"pearson", "spearman"}:
+            first = _get_numeric_column(df, column)
+            second = _get_numeric_column(df, second_column)
+            paired = pd.concat([first.rename("first"), second.rename("second")], axis=1).dropna()
+            if len(paired) < 3:
+                raise HTTPException(status_code=400, detail="Correlation requires at least 3 complete numeric pairs.")
+            if paired["first"].nunique() < 2 or paired["second"].nunique() < 2:
+                raise HTTPException(status_code=400, detail="Correlation requires non-constant values in both columns.")
+            columns = [column, second_column]
+            sample_sizes = [{"complete pairs": int(len(paired))}]
+            result = pearson_corr(paired["first"], paired["second"]) if selected_test == "pearson" else spearman_corr(paired["first"], paired["second"])
+        elif selected_test in {"paired-t-test", "wilcoxon"}:
+            first = _get_numeric_column(df, column)
+            second = _get_numeric_column(df, second_column)
+            paired = pd.concat([first.rename("first"), second.rename("second")], axis=1).dropna()
+            if len(paired) < 2:
+                raise HTTPException(status_code=400, detail="Paired tests require at least 2 complete pairs.")
+            columns = [column, second_column]
+            sample_sizes = [{"complete pairs": int(len(paired))}]
+            if selected_test == "wilcoxon" and np.allclose(paired["first"], paired["second"]):
+                raise HTTPException(status_code=400, detail="Wilcoxon is undefined when every paired difference is zero.")
+            result = paired_ttest(paired["first"], paired["second"]) if selected_test == "paired-t-test" else wilcoxon_test(paired["first"], paired["second"])
+        elif selected_test in {"independent-t-test", "mann-whitney", "anova", "kruskal"}:
+            values = _get_numeric_column(df, column)
+            if not group_column or group_column not in df.columns:
+                raise HTTPException(status_code=400, detail="Select a valid grouping column.")
+            grouped = pd.DataFrame({"value": values, "group": df.loc[values.index, group_column]}).dropna()
+            grouped_parts = list(grouped.groupby("group", observed=True, sort=False))
+            groups = [part["value"].to_numpy() for _, part in grouped_parts]
+            if len(groups) < 2 or any(len(group) < 2 for group in groups):
+                raise HTTPException(status_code=400, detail="Each selected group must contain at least 2 numeric observations, with at least 2 groups.")
+            columns = [column, group_column]
+            sample_sizes = [{"group": str(name), "n": int(len(part))} for name, part in grouped_parts]
+            group_summaries = [
+                {
+                    "group": str(name),
+                    "mean": float(part["value"].mean()),
+                    "median": float(part["value"].median()),
+                }
+                for name, part in grouped_parts
+            ]
+            if selected_test in {"independent-t-test", "mann-whitney"} and len(groups) != 2:
+                raise HTTPException(status_code=400, detail="This test requires exactly 2 groups.")
+            if selected_test == "independent-t-test":
+                result = independent_ttest(*groups)
+            elif selected_test == "mann-whitney":
+                result = mann_whitney_test(*groups)
+            elif selected_test == "anova":
+                result = one_way_anova(*groups)
+            else:
+                result = kruskal_test(*groups)
+        elif selected_test in {"chi-square", "chi-square-test"}:
+            if not column or column not in df.columns or not second_column or second_column not in df.columns:
+                raise HTTPException(status_code=400, detail="Select two valid categorical columns.")
+            table = pd.crosstab(df[column], df[second_column])
+            if table.shape[0] < 2 or table.shape[1] < 2:
+                raise HTTPException(status_code=400, detail="Chi-square requires at least 2 categories in each selected column.")
+            columns = [column, second_column]
+            sample_sizes = [{"observations": int(table.to_numpy().sum())}]
+            result = chi_square_test(table.to_numpy())
+            expected = np.asarray(result["Expected Frequency"])
+            low_cells = int((expected < 5).sum())
+            if low_cells:
+                diagnostics.append(f"{low_cells} expected cell count(s) are below 5; the chi-square approximation may be unreliable.")
+            selected_test = "Chi-square"
+        else:
+            raise HTTPException(status_code=400, detail=f"Unsupported statistical test: {test}.")
+
+        response = {
+            "Test": selected_test,
+            "Columns": columns,
+            "Result": result,
+            "Sample sizes": sample_sizes,
+            "Group summaries": group_summaries,
+            "Assumptions and limitations": test_assumptions(test_key),
+            "Diagnostics": diagnostics,
+        }
+        if test_key != "confidence-interval":
+            response["Significance level"] = 0.05
+        return make_json_serializable(response)
+    except HTTPException:
+        raise
+    except (KeyError, ValueError, TypeError) as error:
+        raise HTTPException(status_code=400, detail=f"Could not run {test}: {error}") from error
     finally:
         os.remove(temp_path)
 

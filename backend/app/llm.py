@@ -8,14 +8,16 @@ def ask_llm(prompt: str) -> str:
     Send a prompt to the local Ollama model.
     """
 
-    response = ollama.chat(
-        model=MODEL_NAME,
-        messages=[
-            {
-                "role": "user",
-                "content": prompt
-            }
-        ],
-    )
-
-    return response["message"]["content"]
+    try:
+        response = ollama.chat(
+            model=MODEL_NAME,
+            messages=[
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ],
+        )
+        return response["message"]["content"]
+    except Exception as error:
+        return f"The statistical result is available, but the local AI model could not respond ({error})."
